@@ -13,3 +13,12 @@ class ProviderPlan:
 
     target: ProviderTarget
     payload: object
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionHandle:
+    """An opaque reference the provider hands back once provisioning starts.
+    Used by the adapter later for health checks and teardown."""
+
+    target: ProviderTarget
+    reference: object

@@ -36,6 +36,12 @@ class DeploymentProvisioning:
 
 
 @dataclass(frozen=True, slots=True)
+class DeploymentStarting:
+    deployment_id: DeploymentId
+    at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentProgress:
     deployment_id: DeploymentId
     at: datetime
@@ -81,6 +87,7 @@ DeploymentEvent = (
     | DeploymentCompiled
     | DeploymentPlaced
     | DeploymentProvisioning
+    | DeploymentStarting
     | DeploymentProgress
     | DeploymentHealthy
     | DeploymentDegraded
