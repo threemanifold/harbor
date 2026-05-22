@@ -91,3 +91,19 @@ forbidden_modules = [
     "harbor.interfaces",
     "harbor.composition",
 ]
+
+# Use cases orchestrate domain ports + strategies. They must never call into
+# each other — composition is the only place that knows about more than one.
+[[tool.importlinter.contracts]]
+name = "Use cases are independent of each other"
+type = "independence"
+modules = ["harbor.application.use_cases.*"]
+
+# Use cases depend on the strategy Protocols (domain/services/), not on the
+# default implementations (application/services/). Composition wires the
+# concrete impl; the use case never imports it directly.
+[[tool.importlinter.contracts]]
+name = "Use cases depend on strategy protocols, not implementations"
+type = "forbidden"
+source_modules = ["harbor.application.use_cases"]
+forbidden_modules = ["harbor.application.services"]
