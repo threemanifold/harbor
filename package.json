@@ -1,0 +1,29 @@
+{
+  "private": true,
+  "name": "harbor",
+  "scripts": {
+    "dev:frontend": "pnpm -C apps/frontend dev",
+    "dev:backend": "uv run --directory backend uvicorn harbor.main:app --reload",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "lint:fix": "turbo lint:fix",
+    "test:frontend": "pnpm -C apps/frontend test:run",
+    "test:backend": "uv run --directory backend pytest",
+    "test": "./.codex/scripts/run-tests.sh",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.2",
+    "turbo": "^2.9.8"
+  },
+  "packageManager": "pnpm@10.24.0",
+  "lint-staged": {
+    "backend/**/*.py": [
+      "uvx ruff format"
+    ],
+    "apps/frontend/**/*.{ts,tsx,js,jsx}": [
+      "pnpm -C apps/frontend exec eslint --fix"
+    ]
+  }
+}
