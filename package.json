@@ -20,7 +20,8 @@
   "packageManager": "pnpm@10.24.0",
   "lint-staged": {
     "backend/**/*.py": [
-      "uvx ruff format"
+      "uvx ruff format",
+      "uvx ruff check --fix"
     ],
     "apps/frontend/**/*.{ts,tsx,js,jsx}": [
       "pnpm -C apps/frontend exec eslint --fix"

@@ -16,6 +16,7 @@ dev = [
     "httpx>=0.27,<1",
     "ruff>=0.8,<1",
     "mypy>=1.13,<2",
+    "import-linter>=2.0,<3",
 ]
 
 [build-system]
@@ -46,3 +47,47 @@ show_error_codes = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.importlinter]
+root_package = "harbor"
+
+# Core onion layers. Higher layers can import from lower; siblings declared
+# with `|` cannot import each other.
+#   composition  - the only place allowed to know about all other layers
+#   interfaces   - driving adapters (HTTP, WS); sibling to infrastructure
+#   infrastructure - driven adapters (DB, provider SDKs); sibling to interfaces
+#   application  - use cases
+#   domain       - pure types, ports, aggregates (knows nothing)
+[[tool.importlinter.contracts]]
+name = "Onion layers"
+type = "layers"
+layers = [
+    "harbor.composition",
+    "harbor.interfaces | harbor.infrastructure",
+    "harbor.application",
+    "harbor.domain",
+]
+
+# Config is a leaf: only composition is allowed to read it.
+[[tool.importlinter.contracts]]
+name = "Config is consumed only by composition"
+type = "forbidden"
+source_modules = [
+    "harbor.domain",
+    "harbor.application",
+    "harbor.infrastructure",
+    "harbor.interfaces",
+]
+forbidden_modules = ["harbor.config"]
+
+[[tool.importlinter.contracts]]
+name = "Config has no internal harbor imports"
+type = "forbidden"
+source_modules = ["harbor.config"]
+forbidden_modules = [
+    "harbor.domain",
+    "harbor.application",
+    "harbor.infrastructure",
+    "harbor.interfaces",
+    "harbor.composition",
+]

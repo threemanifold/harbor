@@ -1,1 +1,9 @@
 pnpm exec lint-staged
+
+# mypy and import-linter run project-wide (mypy strict needs the full import
+# graph; import-linter validates dependency direction across layers).
+# Skip when no backend Python files are staged.
+if git diff --cached --name-only | grep -q '^backend/.*\.py$'; then
+  uv run --directory backend mypy . || exit 1
+  uv run --directory backend lint-imports || exit 1
+fi
