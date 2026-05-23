@@ -63,9 +63,21 @@ class CreateDeployment:
         request: WorkflowRequest,
         owner: OwnerId,
         team: TeamId,
+        deployment_id: DeploymentId | None = None,
     ) -> DeploymentId:
+        """Run the provisioning flow.
+
+        Parameters
+        ----------
+        deployment_id:
+            Optional pre-minted identifier. The HTTP layer mints the id
+            synchronously so it can return it in the ``POST /deployments``
+            body before this coroutine has a chance to run; if omitted the
+            use case falls back to the injected id factory.
+        """
+
         dep = Deployment.start(
-            deployment_id=self._id_factory.new_deployment_id(),
+            deployment_id=deployment_id or self._id_factory.new_deployment_id(),
             owner=owner,
             team=team,
             request=request,

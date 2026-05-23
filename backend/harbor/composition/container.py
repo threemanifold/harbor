@@ -11,11 +11,23 @@ hand in the Modal-backed registry, while the integration test in this slice
 supplies a fake one. When omitted, an empty registry is used so the container
 is still constructible (handy for the ``/health`` smoke test and SYM-212's
 router wiring).
+
+SYM-212 added two further fields:
+
+* ``http_client`` — a shared :class:`httpx.AsyncClient` the chat-proxy router
+  uses to forward requests to provisioned model endpoints. Tests inject a
+  client backed by :class:`httpx.MockTransport` to stub the upstream.
+* ``background_tasks`` — a set the deployments router stores
+  ``asyncio.create_task`` references in so they are not garbage-collected
+  before completion.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
+
+import httpx
 
 from harbor.application.services.placement_policy import DefaultPlacementPolicy
 from harbor.application.services.recipe_compiler import DefaultRecipeCompiler
@@ -44,14 +56,18 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Container:
-    """Immutable bag of singletons produced by :func:`build_container`.
+    """Bag of singletons produced by :func:`build_container`.
 
     The HTTP layer (SYM-212) reaches for ``create_deployment``; other ports
     are exposed for tests and future use cases. All fields are typed by the
     domain port / strategy protocol — never by the concrete implementation —
     so swapping implementations is a one-line change in this module.
+
+    The dataclass is mutable only so ``background_tasks`` can be mutated in
+    place by router handlers; the other fields are still treated as
+    write-once singletons.
     """
 
     clock: Clock
@@ -64,11 +80,14 @@ class Container:
     repo: DeploymentRepository
     bus: EventBus
     create_deployment: CreateDeployment
+    http_client: httpx.AsyncClient
+    background_tasks: set[asyncio.Task[object]] = field(default_factory=set)
 
 
 def build_container(
     *,
     providers: ConnectedProviderRegistry | None = None,
+    http_client: httpx.AsyncClient | None = None,
 ) -> Container:
     """Wire the default Harbor backend.
 
@@ -79,6 +98,10 @@ def build_container(
         is used; this is fine for smoke tests but leaves :class:`CreateDeployment`
         in a "no providers connected" state. SYM-211 will supply the real
         Modal-backed registry.
+    http_client:
+        Optional :class:`httpx.AsyncClient` used by the chat-proxy router to
+        forward requests to provisioned endpoints. Tests inject a client
+        backed by :class:`httpx.MockTransport` to stub the upstream.
     """
 
     clock: Clock = SystemClock()
@@ -91,6 +114,11 @@ def build_container(
     bus: EventBus = InMemoryEventBus()
     registry: ConnectedProviderRegistry = (
         providers if providers is not None else EmptyProviderRegistry()
+    )
+    resolved_client: httpx.AsyncClient = (
+        http_client
+        if http_client is not None
+        else httpx.AsyncClient(timeout=httpx.Timeout(60.0))
     )
 
     create_deployment = CreateDeployment(
@@ -116,4 +144,5 @@ def build_container(
         repo=repo,
         bus=bus,
         create_deployment=create_deployment,
+        http_client=resolved_client,
     )

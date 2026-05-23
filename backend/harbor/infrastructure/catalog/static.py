@@ -56,3 +56,6 @@ class StaticModelCatalog:
 
     async def get(self, ref: ModelRef) -> ModelEntry | None:
         return self._entries.get(ref)
+
+    async def list_all(self) -> tuple[ModelEntry, ...]:
+        return tuple(self._entries.values())
