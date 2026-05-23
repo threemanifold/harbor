@@ -5,8 +5,12 @@ import { harborClient } from '../api/harbor';
 interface ProvisioningProps {
   deploymentId: string;
   client?: HarborClient;
-  /** Hash route the "Open chat" CTA navigates to once HEALTHY. */
-  chatHref?: (deploymentId: string) => string;
+  /**
+   * Hash route the "Open chat" CTA navigates to once HEALTHY. Optionally
+   * passes the compiled model identifier so the chat screen can show which
+   * model the user is talking to without an extra round-trip.
+   */
+  chatHref?: (deploymentId: string, opts?: { model?: string; endpointUrl?: string }) => string;
 }
 
 /**
@@ -132,11 +136,18 @@ function statusFor(
   return 'pending';
 }
 
-function defaultChatHref(deploymentId: string): string {
-  // Hash route consumed by SYM-215 chat screen. Until that ticket lands the
-  // link merely navigates the placeholder hash — App.tsx renders a "coming
-  // soon" notice for unknown routes.
-  return `#/deployments/${deploymentId}/chat`;
+function defaultChatHref(
+  deploymentId: string,
+  opts: { model?: string; endpointUrl?: string } = {},
+): string {
+  // Hash route consumed by the SYM-215 chat screen. The model + endpoint
+  // are surfaced as query params so the chat header can display them
+  // immediately, without re-fetching the deployment status.
+  const params = new URLSearchParams();
+  if (opts.model) params.set('model', opts.model);
+  if (opts.endpointUrl) params.set('endpoint', opts.endpointUrl);
+  const query = params.toString();
+  return `#/deployments/${deploymentId}/chat${query ? `?${query}` : ''}`;
 }
 
 export function Provisioning({
@@ -224,7 +235,19 @@ export function Provisioning({
         <div className="harbor-endpoint" role="region" aria-label="Endpoint">
           <p className="harbor-endpoint__label">Endpoint</p>
           <code className="harbor-endpoint__url">{state.endpointUrl}</code>
-          <a className="harbor-primary harbor-primary--link" href={chatHref(deploymentId)}>
+          <a
+            className="harbor-primary harbor-primary--link"
+            href={chatHref(deploymentId, {
+              // The compiled event carries the catalog identifier the user
+              // picked. Threading it into the chat URL lets the chat
+              // header render the model name without an extra round-trip.
+              model:
+                state.seen.compiled?.type === 'compiled'
+                  ? state.seen.compiled.model
+                  : undefined,
+              endpointUrl: state.endpointUrl ?? undefined,
+            })}
+          >
             Open chat
           </a>
         </div>

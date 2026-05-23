@@ -138,7 +138,10 @@ describe('Provisioning', () => {
 
     expect(screen.getByText('https://endpoint.test/v1')).toBeInTheDocument();
     const cta = screen.getByRole('link', { name: /open chat/i });
-    expect(cta).toHaveAttribute('href', '#/deployments/dep_1/chat');
+    expect(cta).toHaveAttribute(
+      'href',
+      '#/deployments/dep_1/chat?endpoint=https%3A%2F%2Fendpoint.test%2Fv1',
+    );
     expect(timelineItem('Healthy')).toHaveAttribute('data-status', 'done');
   });
 
