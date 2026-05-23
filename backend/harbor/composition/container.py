@@ -6,11 +6,11 @@ wires the default application services, the in-memory infrastructure adapters,
 and a :class:`CreateDeployment` use-case instance into a single immutable
 ``Container`` for the HTTP layer / tests to consume.
 
-The provider registry is the one externally-injectable seam: SYM-211 will
-hand in the Modal-backed registry, while the integration test in this slice
-supplies a fake one. When omitted, an empty registry is used so the container
-is still constructible (handy for the ``/health`` smoke test and SYM-212's
-router wiring).
+The provider registry is the one externally-injectable seam: when omitted,
+:func:`build_default_provider_registry` consults the process env and either
+wires the Modal-backed registry (if ``MODAL_TOKEN_ID`` etc. are set) or falls
+back to :class:`EmptyProviderRegistry` (handy for the ``/health`` smoke test
+and SYM-212's router wiring). Tests supply their own registry directly.
 
 SYM-212 added two further fields:
 
@@ -34,7 +34,10 @@ from harbor.application.services.recipe_compiler import DefaultRecipeCompiler
 from harbor.application.services.resource_resolver import DefaultResourceResolver
 from harbor.application.use_cases.create_deployment import CreateDeployment
 from harbor.composition.ids import UuidIdFactory
-from harbor.composition.providers import EmptyProviderRegistry
+from harbor.composition.providers import (
+    EmptyProviderRegistry,
+    build_default_provider_registry,
+)
 from harbor.domain.ports.clock import Clock
 from harbor.domain.ports.deployment_repository import DeploymentRepository
 from harbor.domain.ports.event_bus import EventBus
@@ -94,10 +97,12 @@ def build_container(
     Parameters
     ----------
     providers:
-        Optional connected-provider registry. When ``None``, an empty registry
-        is used; this is fine for smoke tests but leaves :class:`CreateDeployment`
-        in a "no providers connected" state. SYM-211 will supply the real
-        Modal-backed registry.
+        Optional connected-provider registry. When ``None``,
+        :func:`build_default_provider_registry` inspects the process env: if
+        Modal credentials are configured it returns
+        :class:`ModalConnectedProviderRegistry`, otherwise it falls back to
+        :class:`EmptyProviderRegistry` (handy for the ``/health`` smoke test
+        and integration tests that don't need real provisioning).
     http_client:
         Optional :class:`httpx.AsyncClient` used by the chat-proxy router to
         forward requests to provisioned endpoints. Tests inject a client
@@ -113,7 +118,7 @@ def build_container(
     repo: DeploymentRepository = InMemoryDeploymentRepository()
     bus: EventBus = InMemoryEventBus()
     registry: ConnectedProviderRegistry = (
-        providers if providers is not None else EmptyProviderRegistry()
+        providers if providers is not None else build_default_provider_registry()
     )
     resolved_client: httpx.AsyncClient = (
         http_client
