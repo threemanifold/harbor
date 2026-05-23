@@ -32,6 +32,14 @@ const fakeHarbor = vi.hoisted(() => {
         return { close: () => undefined };
       },
     ),
+    getDeployment: vi.fn().mockResolvedValue({
+      deployment_id: 'dep_fake',
+      state: 'HEALTHY',
+      endpoint_url: 'https://endpoint.test/v1',
+      failure_reason: null,
+      created_at: '2026-05-23T12:00:00Z',
+      updated_at: '2026-05-23T12:00:01Z',
+    }),
     emit(event: DeploymentEvent) {
       for (const sub of subscribers) sub(event);
     },
@@ -40,6 +48,7 @@ const fakeHarbor = vi.hoisted(() => {
       this.listCatalog.mockClear();
       this.createDeployment.mockClear();
       this.streamDeploymentEvents.mockClear();
+      this.getDeployment.mockClear();
     },
   };
 });
@@ -96,11 +105,15 @@ describe('App router', () => {
     await screen.findByText('https://endpoint');
   });
 
-  it('renders a chat placeholder for the chat hash route', async () => {
+  it('renders the chat screen for the chat hash route', async () => {
     render(<App />);
     await screen.findByRole('heading', { level: 1, name: 'Pick a model' });
-    window.location.hash = '#/deployments/dep_fake/chat';
-    await screen.findByRole('heading', { level: 1, name: 'Chat coming soon' });
+    window.location.hash =
+      '#/deployments/dep_fake/chat?model=Qwen%2FQwen2.5-7B-Instruct';
+    await screen.findByRole('heading', { level: 1, name: 'Chat' });
+    expect(
+      await screen.findByText('Qwen/Qwen2.5-7B-Instruct'),
+    ).toBeInTheDocument();
   });
 
   it('renders a not-found screen for unknown hashes', async () => {

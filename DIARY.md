@@ -165,3 +165,57 @@ currently has little product behavior.
   model selection, provider connection state, deployment request submission,
   and deployment status display.
 - Add end-to-end tests once an HTTP deployment path and frontend workflow exist.
+
+
+---
+
+Date: 2026-05-23 (SYM-215 — Qwen e2e milestone)
+
+## Qwen end-to-end milestone
+
+SYM-208 (the umbrella ticket "a user can chat with Qwen") is satisfied with
+the merge of SYM-215. The full flow now lives in the repo:
+
+- **Backend** exposes `POST /deployments`, an SSE lifecycle stream at
+  `GET /deployments/{id}/events`, and the OpenAI-compatible chat proxy
+  at `POST /deployments/{id}/chat` that strips the upstream bearer.
+- **Frontend** ships three screens — `PickModel`, `Provisioning`, and the
+  new `Chat` panel — wired by a hash-based router. The chat panel parses
+  OpenAI SSE deltas via `src/api/chat-stream.ts` and renders the assistant
+  response token-by-token. Conversation history is kept in component
+  state; no backend persistence yet (intentional, per the SYM-215 scope).
+- **Modal** hosts the actual Qwen 2.5 7B (AWQ-INT4) and 3B vLLM Functions
+  (SYM-213). The Harbor backend reads their URLs from `backend/.env` and
+  proxies user messages through.
+
+## Notable shape decisions in SYM-215
+
+- The chat hash route carries `?model=` and `?endpoint=` query params so
+  the chat header can show the user which model they are talking to
+  without an extra round-trip. `Provisioning` bakes these into the
+  `Open chat` CTA href from the `compiled` and `healthy` lifecycle
+  events.
+- `chat-stream.ts` is the single place that knows the wire format. It
+  understands both `data: ...` SSE frames and bare-JSON NDJSON lines so
+  the proxy stays a true pass-through if a future vLLM build switches
+  formats.
+- The composer accepts <kbd>Cmd/Ctrl + Enter</kbd> as the submit
+  shortcut and lets plain <kbd>Enter</kbd> insert a newline — so users
+  can compose multi-line prompts.
+
+## Walkthroughs
+
+- `apps/frontend/e2e/chat-e2e.spec.ts` — the canonical mocked walkthrough
+  recorded into `walkthroughs/*.webm` and attached to SYM-215.
+- `apps/frontend/e2e/chat-live.spec.ts` — the same gestures against the
+  live SYM-213 Modal endpoint. Skipped unless `HARBOR_LIVE_CHAT=1` is set,
+  because the orchestration sandbox cannot reach `*.modal.run` (only
+  `api.modal.com` is whitelisted in `/etc/hosts`). The live recording is
+  followed up as a manual run from a host with public-internet egress.
+
+## Where to go next
+
+- Persist conversation history server-side once authentication lands.
+- Surface streaming usage metrics (tokens/sec, first-token latency) on
+  the chat header.
+- Add tool-call rendering for OpenAI tool/function responses.

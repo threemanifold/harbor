@@ -1,23 +1,40 @@
 import { useCallback, useEffect, useState } from 'react';
+import Chat from './screens/Chat';
 import PickModel from './screens/PickModel';
 import Provisioning from './screens/Provisioning';
 
 interface ParsedRoute {
-  kind: 'pick' | 'provisioning' | 'chat-placeholder' | 'unknown';
+  kind: 'pick' | 'provisioning' | 'chat' | 'unknown';
   deploymentId?: string;
+  /** Model identifier carried through the chat hash query (``?model=…``). */
+  model?: string;
+  /** Endpoint URL hint, also passed via the hash query. */
+  endpointUrl?: string;
 }
 
 function parseRoute(hash: string): ParsedRoute {
-  // Strip leading "#" and any leading slash so both "#/" and "#" work.
-  const path = hash.replace(/^#\/?/, '/');
-  if (path === '/' || path === '') return { kind: 'pick' };
-  const provisioningMatch = path.match(/^\/deployments\/([^/]+)$/);
+  // Strip leading "#" + optional "/" so both "#/" and "#" work. Split the
+  // query off the path before pattern-matching: hash routes don't enjoy the
+  // automatic ``URL`` parsing of regular paths.
+  const trimmed = hash.replace(/^#\/?/, '/');
+  const [pathPart, queryPart = ''] = trimmed.split('?');
+  const params = new URLSearchParams(queryPart);
+
+  if (pathPart === '/' || pathPart === '') return { kind: 'pick' };
+
+  const provisioningMatch = pathPart.match(/^\/deployments\/([^/]+)$/);
   if (provisioningMatch) {
     return { kind: 'provisioning', deploymentId: provisioningMatch[1] };
   }
-  const chatMatch = path.match(/^\/deployments\/([^/]+)\/chat$/);
+
+  const chatMatch = pathPart.match(/^\/deployments\/([^/]+)\/chat$/);
   if (chatMatch) {
-    return { kind: 'chat-placeholder', deploymentId: chatMatch[1] };
+    return {
+      kind: 'chat',
+      deploymentId: chatMatch[1],
+      model: params.get('model') ?? undefined,
+      endpointUrl: params.get('endpoint') ?? undefined,
+    };
   }
   return { kind: 'unknown' };
 }
@@ -52,7 +69,7 @@ function App() {
         <a href="#/" className="harbor-nav__brand">
           Harbor
         </a>
-        <span className="harbor-nav__tag">model picker · status</span>
+        <span className="harbor-nav__tag">model picker · status · chat</span>
       </nav>
       <main>
         {route.kind === 'pick' && (
@@ -61,19 +78,12 @@ function App() {
         {route.kind === 'provisioning' && route.deploymentId && (
           <Provisioning deploymentId={route.deploymentId} />
         )}
-        {route.kind === 'chat-placeholder' && (
-          <section className="harbor-screen">
-            <header className="harbor-screen__header">
-              <h1>Chat coming soon</h1>
-              <p className="harbor-screen__lede">
-                The chat panel lands with SYM-215. Endpoint is provisioned and
-                ready.
-              </p>
-            </header>
-            <a href="#/" className="harbor-primary harbor-primary--link">
-              Back to model picker
-            </a>
-          </section>
+        {route.kind === 'chat' && route.deploymentId && (
+          <Chat
+            deploymentId={route.deploymentId}
+            model={route.model}
+            endpointUrl={route.endpointUrl}
+          />
         )}
         {route.kind === 'unknown' && (
           <section className="harbor-screen">
