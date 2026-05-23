@@ -33,7 +33,12 @@ APP_NAME = "harbor-qwen-vllm"
 HF_SECRET_NAME = "harbor-hf"
 
 QWEN_3B_REPO = "Qwen/Qwen2.5-3B-Instruct"
-QWEN_7B_REPO = "Qwen/Qwen2.5-7B-Instruct"
+# For the 7B endpoint we serve the official pre-quantized AWQ variant so a
+# single A10G (24 GB) can hold weights + a 32k KV cache.
+# ``--quantization awq`` on the dense ``Qwen/Qwen2.5-7B-Instruct`` repo
+# fails with "Cannot find the config file for awq" because vLLM looks for
+# pre-baked AWQ artefacts in the repo itself.
+QWEN_7B_REPO = "Qwen/Qwen2.5-7B-Instruct-AWQ"
 
 # ---- Tunables --------------------------------------------------------------
 
@@ -43,10 +48,10 @@ _MAX_MODEL_LEN = 32_768
 
 # Modal container lifetime / idle. Both apps spin a single container per
 # request; we give them an hour ceiling and 15 minutes of idle before scale
-# to zero.
+# to zero. (``container_idle_timeout`` was renamed to ``scaledown_window``
+# in Modal SDK 1.x on 2025-02-24; we use the new name only.)
 _TIMEOUT_SECONDS = 60 * 60
 _SCALEDOWN_WINDOW_SECONDS = 60 * 15
-_CONTAINER_IDLE_TIMEOUT = 60 * 5
 
 # ---- Image -----------------------------------------------------------------
 
@@ -104,13 +109,18 @@ def _build_vllm_asgi_app(
     # Translate our knobs into vLLM's CLI args so we use the same defaults
     # the upstream server applies.
     parser = make_arg_parser(FlexibleArgumentParser())
+    # AWQ kernels in vLLM 0.6.4 only support ``float16`` — passing
+    # ``bfloat16`` raises ``ValueError: torch.bfloat16 is not supported for
+    # quantization method awq`` at engine init. For dense (non-quantized)
+    # variants we keep ``bfloat16`` so the L4 has more usable KV cache.
+    dtype = "float16" if quantization == "awq" else "bfloat16"
     cli_args: list[str] = [
         "--model",
         model_repo,
         "--max-model-len",
         str(_MAX_MODEL_LEN),
         "--dtype",
-        "bfloat16",
+        dtype,
         "--gpu-memory-utilization",
         "0.90",
         "--disable-log-requests",
@@ -120,10 +130,18 @@ def _build_vllm_asgi_app(
     args = parser.parse_args(cli_args)
 
     engine_args = AsyncEngineArgs.from_cli_args(args)
+    # ``create_engine_config`` is the same call ``AsyncLLMEngine.from_engine_args``
+    # does internally — we use it once up front so we can hand the resolved
+    # ``ModelConfig`` to ``init_app_state`` without re-parsing the CLI.
+    vllm_config = engine_args.create_engine_config()
     engine = AsyncLLMEngine.from_engine_args(engine_args)
 
     vllm_app: fastapi.FastAPI = build_vllm_app(args)
-    init_app_state(engine, vllm_app.state, args)
+    # vLLM 0.6.4 ``init_app_state`` signature is
+    # ``(engine_client, model_config, state, args)``; the previous 3-arg
+    # call here was missing ``model_config`` and crashed the container on
+    # cold start with ``TypeError: ... missing 1 required positional argument``.
+    init_app_state(engine, vllm_config.model_config, vllm_app.state, args)
 
     @vllm_app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -147,7 +165,6 @@ def _build_vllm_asgi_app(
     gpu="L4",
     timeout=_TIMEOUT_SECONDS,
     scaledown_window=_SCALEDOWN_WINDOW_SECONDS,
-    container_idle_timeout=_CONTAINER_IDLE_TIMEOUT,
     secrets=[_HF_SECRET],
 )
 @modal.asgi_app()
@@ -160,7 +177,6 @@ def serve_3b() -> Any:
     gpu="A10G",
     timeout=_TIMEOUT_SECONDS,
     scaledown_window=_SCALEDOWN_WINDOW_SECONDS,
-    container_idle_timeout=_CONTAINER_IDLE_TIMEOUT,
     secrets=[_HF_SECRET],
 )
 @modal.asgi_app()
