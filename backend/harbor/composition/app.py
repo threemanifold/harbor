@@ -16,12 +16,20 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from harbor.composition.container import Container, build_container
 from harbor.domain.ports.provider_registry import ConnectedProviderRegistry
 from harbor.interfaces.http.routers.catalog import router as catalog_router
 from harbor.interfaces.http.routers.deployments import (
     router as deployments_router,
+)
+
+_DEV_CORS_ORIGINS = (
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
 )
 
 
@@ -57,6 +65,13 @@ def create_app(
             await resolved_container.http_client.aclose()
 
     app = FastAPI(title="Harbor backend", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(_DEV_CORS_ORIGINS),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
     app.state.container = resolved_container
 
     @app.get("/health")

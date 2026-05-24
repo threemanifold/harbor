@@ -223,6 +223,22 @@ def _chat_completions_url(endpoint: Endpoint) -> str:
     return f"{base}/chat/completions"
 
 
+def _upstream_chat_payload(deployment: Deployment, raw_body: bytes) -> bytes:
+    """Render the upstream chat body with the deployment's model identifier."""
+
+    payload = json.loads(raw_body.decode())
+    if not isinstance(payload, dict):
+        raise ValueError("Chat request body must be a JSON object.")
+
+    model_identifier = (
+        deployment.recipe.model.identifier
+        if deployment.recipe is not None
+        else deployment.request.model_ref.identifier
+    )
+    payload["model"] = model_identifier
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
 async def _stream_proxy(
     client: httpx.AsyncClient,
     method: str,
@@ -254,9 +270,10 @@ async def chat_proxy(
 
     * Looks the deployment up in the repository.
     * 404 if unknown, 409 if not in ``HEALTHY`` state.
-    * Forwards the original request body verbatim — only the upstream auth
-      header is added server-side, so the upstream bearer token never leaves
-      the backend process.
+    * Forwards OpenAI-compatible fields through, but pins ``model`` to the
+      deployment recipe identifier so UI labels cannot leak into vLLM.
+    * Adds only the upstream auth header server-side, so the upstream bearer
+      token never leaves the backend process.
     """
 
     container = http_container(request)
@@ -274,7 +291,7 @@ async def chat_proxy(
             ),
         )
 
-    raw_body = await request.body()
+    raw_body = _upstream_chat_payload(dep, await request.body())
     upstream_url = _chat_completions_url(dep.endpoint)
     headers = {
         "Content-Type": "application/json",

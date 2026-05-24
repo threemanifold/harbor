@@ -54,3 +54,21 @@ async def test_openapi_schema_renders() -> None:
     assert "/deployments/{deployment_id}" in paths
     assert "/deployments/{deployment_id}/events" in paths
     assert "/deployments/{deployment_id}/chat" in paths
+
+
+async def test_catalog_allows_dev_preview_cors_preflight() -> None:
+    app = create_app()
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.options(
+            "/catalog",
+            headers={
+                "Origin": "http://localhost:4173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:4173"
+    assert "GET" in resp.headers["access-control-allow-methods"]
