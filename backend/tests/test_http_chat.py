@@ -170,7 +170,7 @@ def _build_stub_app(
 # ---------- Tests ----------
 
 
-async def test_chat_proxy_non_streaming_passes_body_and_strips_auth() -> None:
+async def test_chat_proxy_non_streaming_uses_deployment_model_and_strips_auth() -> None:
     seen_request: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -212,7 +212,7 @@ async def test_chat_proxy_non_streaming_passes_body_and_strips_auth() -> None:
         resp = await http.post(
             f"/deployments/{deployment_id}/chat",
             json={
-                "model": "Qwen/Qwen2.5-3B-Instruct",
+                "model": "qwen",
                 "messages": [{"role": "user", "content": "hi"}],
             },
         )
@@ -227,7 +227,8 @@ async def test_chat_proxy_non_streaming_passes_body_and_strips_auth() -> None:
     assert seen_request["authorization"] == f"Bearer {UPSTREAM_AUTH}"
     assert seen_request["accept"] == "application/json"
 
-    # The original body was forwarded verbatim (extra OpenAI fields preserved).
+    # OpenAI fields are forwarded, but the upstream model is pinned to the
+    # deployment recipe identifier instead of trusting a UI-facing label.
     body_seen = cast(dict[str, object], seen_request["body"])
     assert body_seen["model"] == "Qwen/Qwen2.5-3B-Instruct"
     assert body_seen["messages"] == [{"role": "user", "content": "hi"}]
