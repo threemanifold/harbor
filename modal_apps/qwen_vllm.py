@@ -98,6 +98,52 @@ _HF_SECRET = modal.Secret.from_name(HF_SECRET_NAME)
 # ---- ASGI builder ----------------------------------------------------------
 
 
+def _build_cli_args(
+    *,
+    model_repo: str,
+    quantization: str | None,
+    max_model_len: int,
+) -> list[str]:
+    """Translate Harbor's knobs into the vLLM OpenAI-server CLI flags.
+
+    Pulled out of :func:`_build_vllm_asgi_app` so the args list is a pure,
+    self-contained function — easy to assert on from a unit test without
+    importing :mod:`modal` or vLLM. The function deliberately references
+    no module-level state (no constants, no closures) so a test can
+    ``ast``-extract and ``exec`` the definition in isolation.
+
+    ``serve_3b`` calls with ``quantization=None`` for dense BF16 weights.
+    ``serve_7b`` calls with ``quantization='awq'`` for the pre-quantized
+    AWQ-INT4 repo; that branch also pins ``--served-model-name`` to the
+    catalog identifier so the chat proxy's payload matches.
+    """
+    # AWQ kernels in vLLM 0.6.4 only support ``float16`` — passing
+    # ``bfloat16`` raises ``ValueError: torch.bfloat16 is not supported for
+    # quantization method awq`` at engine init. For dense (non-quantized)
+    # variants we keep ``bfloat16`` so the L4 has more usable KV cache.
+    dtype = "float16" if quantization == "awq" else "bfloat16"
+    cli_args: list[str] = [
+        "--model",
+        model_repo,
+        "--max-model-len",
+        str(max_model_len),
+        "--dtype",
+        dtype,
+        "--gpu-memory-utilization",
+        "0.90",
+        "--disable-log-requests",
+    ]
+    if quantization is not None:
+        cli_args += ["--quantization", quantization]
+    if quantization == "awq":
+        # SYM-221: vLLM otherwise registers the served model under
+        # ``Qwen/Qwen2.5-7B-Instruct-AWQ`` (the repo we actually load),
+        # but the rest of Harbor uses the unquantized identifier. Without
+        # this alias the chat proxy gets ``404 NotFoundError`` from vLLM.
+        cli_args += ["--served-model-name", "Qwen/Qwen2.5-7B-Instruct"]
+    return cli_args
+
+
 def _build_vllm_asgi_app(
     *,
     model_repo: str,
@@ -122,24 +168,11 @@ def _build_vllm_asgi_app(
     # Translate our knobs into vLLM's CLI args so we use the same defaults
     # the upstream server applies.
     parser = make_arg_parser(FlexibleArgumentParser())
-    # AWQ kernels in vLLM 0.6.4 only support ``float16`` — passing
-    # ``bfloat16`` raises ``ValueError: torch.bfloat16 is not supported for
-    # quantization method awq`` at engine init. For dense (non-quantized)
-    # variants we keep ``bfloat16`` so the L4 has more usable KV cache.
-    dtype = "float16" if quantization == "awq" else "bfloat16"
-    cli_args: list[str] = [
-        "--model",
-        model_repo,
-        "--max-model-len",
-        str(_MAX_MODEL_LEN),
-        "--dtype",
-        dtype,
-        "--gpu-memory-utilization",
-        "0.90",
-        "--disable-log-requests",
-    ]
-    if quantization is not None:
-        cli_args += ["--quantization", quantization]
+    cli_args = _build_cli_args(
+        model_repo=model_repo,
+        quantization=quantization,
+        max_model_len=_MAX_MODEL_LEN,
+    )
     args = parser.parse_args(cli_args)
 
     engine_args = AsyncEngineArgs.from_cli_args(args)
