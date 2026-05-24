@@ -7,13 +7,25 @@ Deploy with::
 
 The app is named ``harbor-qwen-vllm`` and exposes two independent ASGI web
 endpoints — one per model — so the ``ModalProviderAdapter`` can target either
-without bringing up both. Both endpoints:
+without bringing up both. Each endpoint is implemented as a single-container
+Modal class (see the ``Qwen3BServer`` / ``Qwen7BServer`` definitions below)
+which:
 
-* Speak OpenAI's ``/v1/chat/completions`` (and the rest of the OpenAI router)
+* Loads the vLLM engine once per container via ``@modal.enter()`` so cold-load
+  cost is paid exactly once even under a burst of provisioning ``/healthz``
+  polls (SYM-222).
+* Allows up to 32 concurrent inputs on the *same* container via
+  ``@modal.concurrent(max_inputs=32)`` — vLLM multiplexes requests internally.
+* Clamps horizontal scale with ``max_containers=1`` so Modal cannot spin up a
+  replica set per deployment.
+* Speaks OpenAI's ``/v1/chat/completions`` (and the rest of the OpenAI router)
   by mounting vLLM's official ``api_server`` FastAPI app.
-* Expose ``/healthz`` for the adapter's provisioning poll.
-* Mount the ``harbor-hf`` Modal secret so the in-container Hugging Face Hub
+* Exposes ``/healthz`` for the adapter's provisioning poll.
+* Mounts the ``harbor-hf`` Modal secret so the in-container Hugging Face Hub
   client can pull gated weights.
+* Pins the published URL slug to ``serve_3b`` / ``serve_7b`` via
+  ``@modal.asgi_app(label=...)`` so the deployed web URLs remain stable
+  across this refactor.
 
 This file is a *deployment artifact* — nothing in :mod:`harbor` imports it,
 and the ``modal`` SDK is intentionally **not** in
@@ -46,10 +58,11 @@ QWEN_7B_REPO = "Qwen/Qwen2.5-7B-Instruct-AWQ"
 # Qwen2.5 supports 32k context out of the box.
 _MAX_MODEL_LEN = 32_768
 
-# Modal container lifetime / idle. Both apps spin a single container per
-# request; we give them an hour ceiling and 15 minutes of idle before scale
-# to zero. (``container_idle_timeout`` was renamed to ``scaledown_window``
-# in Modal SDK 1.x on 2025-02-24; we use the new name only.)
+# Modal container lifetime / idle. Both endpoints share one container per
+# active model (``max_containers=1`` on the class decorators below); we give
+# that container an hour ceiling and 15 minutes of idle before scale to zero.
+# (``container_idle_timeout`` was renamed to ``scaledown_window`` in Modal
+# SDK 1.x on 2025-02-24; we use the new name only.)
 _TIMEOUT_SECONDS = 60 * 60
 _SCALEDOWN_WINDOW_SECONDS = 60 * 15
 
@@ -159,27 +172,77 @@ def _build_vllm_asgi_app(
 
 
 # ---- Functions -------------------------------------------------------------
+#
+# Both serve_* endpoints are deliberately wrapped in ``@app.cls`` so we can:
+#
+# 1. Multiplex many concurrent HTTP requests inside *one* container via
+#    ``@modal.concurrent(max_inputs=32)``. vLLM's ``AsyncLLMEngine`` already
+#    pools requests in a single Python process, so there is no point asking
+#    Modal to spin a new container per input. (Default for an ASGI function
+#    is one input per container — that, plus the ``/healthz`` poll storm
+#    during cold-start, is what was spawning a fleet of ~15 GB-loading peers
+#    per provision; see SYM-222.)
+#
+# 2. Clamp horizontal scale with ``max_containers=1`` so a single deployment
+#    cannot fan out to a replica set. This slice always wants exactly one
+#    container per active model.
+#
+# 3. Load the vLLM engine eagerly in ``@modal.enter()`` so the *first*
+#    ``/healthz`` poll blocks the same container that is paying the cold-load
+#    cost, instead of Modal spawning a peer to satisfy a "second" input
+#    arriving while the first is still warming up.
+#
+# The URL slug is pinned with ``label=...`` on ``@modal.asgi_app`` so the
+# deployed web URLs remain ``...serve_3b....modal.run`` / ``...serve_7b....modal.run``,
+# matching the ``MODAL_WEB_URL_3B`` / ``MODAL_WEB_URL_7B`` env contract that
+# the Harbor adapter consumes.
 
 
-@app.function(
+@app.cls(
     gpu="L4",
     timeout=_TIMEOUT_SECONDS,
     scaledown_window=_SCALEDOWN_WINDOW_SECONDS,
     secrets=[_HF_SECRET],
+    max_containers=1,
 )
-@modal.asgi_app()
-def serve_3b() -> Any:
+@modal.concurrent(max_inputs=32)
+class Qwen3BServer:
     """Qwen 2.5-3B-Instruct on a single L4 (24 GB), BF16, no quantization."""
-    return _build_vllm_asgi_app(model_repo=QWEN_3B_REPO, quantization=None)
+
+    @modal.enter()
+    def _load(self) -> None:
+        # Building the ASGI app pulls down the model weights and initialises
+        # the vLLM engine, which is the ~6-15 GB cold-load we want to pay
+        # exactly once per container. Running it in ``@modal.enter()`` makes
+        # the container appear "busy" to Modal *before* the first input is
+        # routed, so a concurrent ``/healthz`` poll waits on this container
+        # rather than triggering a sibling cold-start.
+        self._asgi_app = _build_vllm_asgi_app(
+            model_repo=QWEN_3B_REPO, quantization=None
+        )
+
+    @modal.asgi_app(label="serve_3b")
+    def serve(self) -> Any:
+        return self._asgi_app
 
 
-@app.function(
+@app.cls(
     gpu="A10G",
     timeout=_TIMEOUT_SECONDS,
     scaledown_window=_SCALEDOWN_WINDOW_SECONDS,
     secrets=[_HF_SECRET],
+    max_containers=1,
 )
-@modal.asgi_app()
-def serve_7b() -> Any:
+@modal.concurrent(max_inputs=32)
+class Qwen7BServer:
     """Qwen 2.5-7B-Instruct on a single A10G (24 GB), AWQ-INT4."""
-    return _build_vllm_asgi_app(model_repo=QWEN_7B_REPO, quantization="awq")
+
+    @modal.enter()
+    def _load(self) -> None:
+        self._asgi_app = _build_vllm_asgi_app(
+            model_repo=QWEN_7B_REPO, quantization="awq"
+        )
+
+    @modal.asgi_app(label="serve_7b")
+    def serve(self) -> Any:
+        return self._asgi_app
